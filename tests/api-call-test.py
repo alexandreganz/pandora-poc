@@ -113,7 +113,16 @@ class MultiPoseJewelryGenerator:
 # EXECUTION (Configured for your files)
 # =========================================
 if __name__ == "__main__":
-    API_KEY = "AIzaSyDx6PMq2QmPVtrhg0BEIyryswlO5GRE5Po"
+    # Load API key from environment variable
+    import os
+    from dotenv import load_dotenv
+    load_dotenv()
+
+    API_KEY = os.getenv("GEMINI_API_KEY")
+    if not API_KEY:
+        print("❌ Error: GEMINI_API_KEY not found in environment variables")
+        print("Please set it in your .env file or environment")
+        exit(1)
     
     # Primary Inputs
     face_file = "model_test.jpg"
