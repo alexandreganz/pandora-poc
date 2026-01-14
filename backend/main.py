@@ -159,8 +159,16 @@ class PhotoScaler:
     """
 
     def __init__(self):
-        self.mp_face_mesh = mp.solutions.face_mesh
         self.hvid_mm = HVID_MM  # Standard horizontal visible iris diameter
+        self.enabled = False
+        try:
+            self.mp_face_mesh = mp.solutions.face_mesh
+            self.enabled = True
+            print("[PhotoScaler] MediaPipe initialized successfully")
+        except AttributeError:
+            print("[PhotoScaler] MediaPipe not available - iris detection disabled")
+            print("[PhotoScaler] Earrings will use default sizing")
+            self.mp_face_mesh = None
 
     def calculate_ppm(self, image_bytes: bytes) -> float:
         """
@@ -172,6 +180,10 @@ class PhotoScaler:
         Returns:
             PPM value (pixels per millimeter), or None if detection fails
         """
+        if not self.enabled:
+            print("   [SKIP] Iris detection disabled - using default sizing")
+            return None
+
         try:
             # Convert bytes to numpy array for OpenCV
             nparr = np.frombuffer(image_bytes, np.uint8)
