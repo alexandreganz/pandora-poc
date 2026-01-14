@@ -320,11 +320,18 @@ class VirtualTryOnGenerator:
         content_parts = [
             types.Part.from_bytes(data=face_bytes, mime_type="image/jpeg"),
             types.Part.from_bytes(data=style_ref_bytes, mime_type="image/jpeg"),
-            f"TASK: Identity-Preserving Pose Variation. "
-            f"SUBJECT: Maintain 100% facial identity of the first image. "
-            f"STYLE: Match the lighting, skin texture, and professional quality of the second image. "
-            f"POSE: Re-imagine the person in {pose_desc}. "
-            f"CRITICAL: Expose the ear clearly for jewelry placement."
+            f"TASK: Generate a new pose of the EXACT person from Image 1. "
+            f"IDENTITY (CRITICAL - 100% PRESERVATION): "
+            f"- Face: Keep the EXACT same face shape, eyes, nose, mouth, eyebrows, and all facial features from Image 1. "
+            f"- Skin: Keep the EXACT same skin tone, texture, and complexion from Image 1. "
+            f"- Hair: Keep the EXACT same hair color, style, length, and texture from Image 1. "
+            f"- Age: Keep the EXACT same apparent age from Image 1. "
+            f"- Ethnicity: Keep the EXACT same ethnic features from Image 1. "
+            f"DO NOT borrow ANY physical features from Image 2. The person must be 100% recognizable as the same individual from Image 1. "
+            f"FROM IMAGE 2 USE ONLY: Lighting direction, lighting quality, shadow softness, and overall photographic style. "
+            f"POSE: Re-imagine this exact person in {pose_desc}. "
+            f"CRITICAL: Expose the ear clearly for jewelry placement. "
+            f"OUTPUT: A photorealistic image that looks exactly like the person from Image 1, just in a different pose."
         ]
 
         try:
@@ -390,12 +397,16 @@ class VirtualTryOnGenerator:
             types.Part.from_bytes(data=pose_bytes, mime_type="image/png"),   # Reference 1: Person
             types.Part.from_bytes(data=earring_bytes, mime_type="image/png"),# Reference 2: Earring
             types.Part.from_bytes(data=style_bytes, mime_type="image/jpeg"), # Reference 3: Style
-            f"TASK: Place the earring from Image 2 onto the person in Image 1. "
-            f"EARRING: Use ONLY the exact earring design from Image 2 - this is a {product_name} earring. "
-            f"PLACEMENT: Place exactly ONE earring on the visible earlobe. Do NOT add extra earrings. "
-            f"IMPORTANT: Do NOT modify, duplicate, or hallucinate different earring designs. "
-            f"LIGHTING: Match the lighting style from Image 3. "
-            f"OUTPUT: Photorealistic result with the person wearing the single earring naturally."
+            f"TASK: Add the earring from Image 2 onto the person in Image 1. "
+            f"IDENTITY (CRITICAL - DO NOT CHANGE): "
+            f"- Keep 100% of the person's appearance from Image 1: face, skin tone, hair, features. "
+            f"- The person in the output must be IDENTICAL to Image 1 - do not alter any physical characteristics. "
+            f"EARRING: Use ONLY the exact {product_name} earring design from Image 2. "
+            f"- Do NOT modify, resize, or change the earring design in any way. "
+            f"- Place exactly ONE earring on the visible earlobe. Do NOT add extra earrings. "
+            f"FROM IMAGE 3 USE ONLY: Lighting direction and quality for the earring reflection/shadows. "
+            f"- Do NOT borrow any physical features from the person in Image 3. "
+            f"OUTPUT: The exact person from Image 1 wearing the exact earring from Image 2, with lighting from Image 3."
         ]
 
         try:

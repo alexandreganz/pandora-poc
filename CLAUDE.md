@@ -4,55 +4,66 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Pandora is a minimalist, modern jewelry online store with synchronized backend and frontend.
+Pandora is a luxury jewelry online store with AI-powered virtual try-on capabilities. Features a high-end aesthetic with elegant typography and warm gold accents.
 
 ### Features
-- 5 purchasable jewelry items (earrings with known dimensions)
+- 6 purchasable jewelry items (earrings with known dimensions in mm)
+- **Luxury UI**: Elegant design with Cormorant Garamond & Montserrat fonts, 4:5 aspect ratio cards, 3-column grid
 - **Image Carousel**: Interactive carousel on each product card
   - Shows 2 product images by default (different angles)
   - Navigation via arrow buttons (prev/next)
   - Dot indicators for current image
   - Automatically adds a 3rd image after user completes virtual try-on
-- Each product card shows item name and price below the image
-- **Virtual Try-On**: AI-powered earring preview on user photos
+- **Virtual Try-On**: Two-stage AI workflow for realistic earring preview
 - Try-on results persist in product carousels for easy comparison
 
-### Virtual Try-On Feature
-Users upload a single front-facing photo to virtually try on earrings:
+### Products
+1. Classic Circle ($89) - 25mm x 25mm
+2. Silver Flower ($95) - 6.7mm x 6.8mm
+3. Red Heart ($79) - 15mm x 14mm
+4. Gold Heart ($125) - 18mm x 16mm
+5. Silver Heart ($85) - 15mm x 14mm
+6. Blue Butterfly ($110) - 20mm x 22mm
 
-1. **Front photo** (facing camera directly with both ears visible)
-   - MediaPipe extracts face mesh landmarks
-   - Calculate iris diameter to determine scale (pixels per mm)
-   - Detect both earlobe positions for earring placement
+## Virtual Try-On Feature
 
-2. **AI Generation** (Google Gemini Imagen)
-   - Combine user face measurements + earring dimensions
-   - Generate realistic try-on image with correctly sized earrings on both ears
+### Two-Stage AI Workflow
 
-3. **Carousel Integration**
-   - Try-on result is automatically added as the 3rd image in the product's carousel
-   - Users can return to the main page and browse their try-on results
-   - Each product remembers its try-on image for the session
+**Stage 1: Identity-Preserving Pose Generation**
+- Takes user's front-facing photo + style reference (product image2)
+- Generates unique pose variation (6 pose types available)
+- CRITICAL: Preserves 100% of user's physical characteristics
+- Style reference used ONLY for lighting and positioning
 
-## User Journey
+**Stage 2: Earring Composition**
+- Takes posed image + earring asset + style reference
+- Composites exact earring onto the pose
+- Maintains user identity and earring design integrity
+- Uses style reference ONLY for lighting/shadows
 
-1. **Browse Products**: User sees 5 earring products, each with a 2-image carousel
-2. **Virtual Try-On**: User clicks "Virtual Try-On" button in header
-3. **Upload Photo**: User uploads a single front-facing photo
-4. **Select Earrings**: User clicks on earrings to try them on
-5. **View Results**: AI-generated try-on appears in modal
-6. **Return to Shopping**: User closes modal and returns to product grid
-7. **Browse Try-Ons**: Each tried-on product now has 3 images in its carousel
-8. **Compare Options**: User can navigate carousels to compare different earrings on their photo
-9. **Add to Cart**: User adds desired items to cart and proceeds to checkout
+### Pose Variations (6 types)
+- `profile_left`: 90-degree profile view looking left
+- `three_quarter_right`: Three-quarter view looking slightly right
+- `slightly_up`: Slight upward gaze, exposing neck and earlobe
+- `high_angle_down`: High-angle view looking down
+- `profile_right_tilt`: 90-degree profile right with head tilt
+- `back_three_quarter_left`: Over-the-shoulder view from behind
+
+### Identity Preservation (Prompt Engineering)
+The prompts explicitly preserve:
+- Face shape, eyes, nose, mouth, eyebrows
+- Skin tone, texture, complexion
+- Hair color, style, length, texture
+- Age and ethnic features
+- States: "DO NOT borrow ANY physical features from reference images"
 
 ## Tech Stack
 
-- **Frontend**: React + Vite
-- **Backend**: Python + FastAPI
-- **Computer Vision**: MediaPipe (face mesh, ear detection)
-- **AI Image Generation**: Google Gemini Imagen API
-- **Payments**: Mock checkout (simulated)
+- **Frontend**: React 19 + Vite 7
+- **Backend**: Python 3.12 + FastAPI
+- **Computer Vision**: MediaPipe (face mesh, iris detection)
+- **AI Image Generation**: Google Gemini API (gemini-3-pro-image-preview)
+- **Styling**: CSS with Google Fonts (Cormorant Garamond, Montserrat)
 
 ## Build Commands
 
@@ -60,7 +71,7 @@ Users upload a single front-facing photo to virtually try on earrings:
 ```bash
 cd frontend
 npm install        # Install dependencies
-npm run dev        # Start dev server (http://localhost:5173)
+npm run dev        # Start dev server (http://localhost:5173 or 5174)
 npm run build      # Build for production
 ```
 
@@ -68,81 +79,150 @@ npm run build      # Build for production
 ```bash
 cd backend
 pip install -r requirements.txt   # Install dependencies
-python -m uvicorn main:app --reload   # Start dev server (http://localhost:8000)
+python -m uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ```
 
 **Key Backend Features:**
-- Iris-based scale calibration (11.7mm biological constant)
+- Iris-based scale calibration (11.7mm HVID biological constant)
 - MediaPipe face mesh for landmark detection
 - PIL with LANCZOS resampling for high-quality earring scaling
-- Dual earlobe detection (both ears from single photo)
-- Gemini 2.0 Flash for photorealistic AI blending
+- Session-based image storage (organized by timestamp)
+- Environment-based CORS configuration
 
 ## Architecture
 
 ```
 pandora/
-├── frontend/          # React + Vite app
+├── frontend/                    # React + Vite app
 │   ├── src/
-│   │   ├── components/   # React components
-│   │   ├── assets/       # Images, fonts
-│   │   └── App.jsx       # Main app component
-│   └── package.json
-└── backend/           # FastAPI server
-    ├── main.py           # API routes
-    └── requirements.txt
+│   │   ├── App.jsx             # Main app component
+│   │   ├── App.css             # Component styles
+│   │   └── index.css           # Global styles + CSS variables
+│   ├── public/images/          # Product images
+│   ├── Dockerfile              # Production container
+│   ├── nginx.conf              # Production server config
+│   └── vercel.json             # Vercel deployment config
+├── backend/
+│   ├── main.py                 # FastAPI server + AI logic
+│   ├── requirements.txt        # Python dependencies
+│   ├── generated_images/       # Session output folders
+│   │   └── {session_id}/
+│   │       ├── original_photo.jpg
+│   │       ├── poses/          # Stage 1 outputs
+│   │       └── try_ons/        # Stage 2 outputs
+│   ├── Dockerfile              # Production container
+│   ├── railway.json            # Railway deployment config
+│   └── .env.example            # Environment template
+└── docker-compose.yml          # Local containerized testing
 ```
 
 ### API Endpoints
-- `GET /api/products` - Returns list of jewelry items with name, price, dimensions, images
-- `POST /api/try-on` - Accepts front photo + selected earring ID; returns generated try-on image with earrings on both ears
+- `GET /api/products` - Returns list of 6 jewelry items with name, price, dimensions, images
+- `POST /api/try-on-all` - Accepts front photo; returns 6 generated try-on images (one per product)
 
-### Product Carousel Implementation
+## Key Code Locations
 
-Each product card includes an interactive image carousel:
+### Prompt Engineering (backend/main.py)
+| Stage | Lines | Purpose |
+|-------|-------|---------|
+| Stage 1 | ~320-340 | Pose generation with identity preservation |
+| Stage 2 | ~396-420 | Earring composition |
 
-**Default State (No Try-On)**
-- Image 1: Primary product photo
-- Image 2: Secondary product photo (different angle)
+### To modify prompts:
+1. Edit `backend/main.py` at the line numbers above
+2. Save the file (Ctrl+S)
+3. Backend auto-reloads (watch for "WatchFiles detected changes" message)
+4. Test at http://localhost:5173 or 5174
 
-**After Try-On**
-- Image 1: Primary product photo
-- Image 2: Secondary product photo
-- Image 3: User's try-on result (AI-generated)
+### Product Data (backend/main.py)
+- Lines ~64-125: PRODUCTS array with id, name, price, images, dimensions
 
-**Navigation**
-- Arrow buttons (prev/next) - appear on hover
-- Dot indicators at bottom - click to jump to specific image
-- Smooth transitions between images
+### Frontend Styling
+- `frontend/src/index.css`: CSS variables, fonts, global styles
+- `frontend/src/App.css`: Component styles, grid layout, animations
 
-**State Management**
-- Try-on results stored in App component (`tryOnResults` state)
-- Passed down to individual ProductCard components
-- Persists during session (resets on page refresh)
+## Development Workflow
 
-### Try-On Processing Flow
+### Auto-Reload Behavior
+- **Backend**: Running with `--reload` flag auto-restarts on file changes
+- **Frontend**: Vite HMR (Hot Module Replacement) for instant CSS/JS updates
+
+### Testing Changes
+1. Make changes to code
+2. Save file
+3. Wait 2-3 seconds for reload
+4. Refresh browser / test feature
+5. Check backend logs: `tail -50 {output_file}`
+
+### Session Image Storage
+Generated images are organized by session:
 ```
-Frontend                    Backend
-   │                           │
-   ├── Upload front photo ────►│
-   │   + earring ID            │
-   │                           ├── MediaPipe: extract face landmarks
-   │                           ├── Calculate iris diameter → pixels per mm (PPM)
-   │                           ├── Detect both earlobe positions
-   │                           ├── Get earring dimensions from DB
-   │                           ├── Scale earring to correct size (dimensions × PPM)
-   │                           ├── Place earrings on both ears
-   │                           ├── Call Gemini Imagen API for realistic blending
-   │                           │
-   │◄── Generated image ───────┤
-   │
-   ├── Store try-on image
-   │   in App state
-   │
-   ├── Add image to product
-   │   carousel (3rd image)
-   │
-   └── User can navigate
-       carousel to view
-       try-on result
+generated_images/
+└── 20260114_123456_abc12345/   # Session folder (timestamp_uuid)
+    ├── original_photo.jpg       # User's uploaded photo
+    ├── poses/                   # Stage 1 outputs
+    │   ├── pose_profile_left_xxx.png
+    │   └── pose_three_quarter_right_xxx.png
+    └── try_ons/                 # Stage 2 outputs
+        ├── classic_circle_xxx.png
+        └── blue_butterfly_xxx.png
+```
+
+## Deployment
+
+### Environment Variables
+```env
+GEMINI_API_KEY=your_gemini_api_key_here
+CORS_ORIGINS=https://your-frontend.vercel.app
+```
+
+### Recommended Stack
+- **Frontend**: Vercel (free tier, auto-deploy from GitHub)
+- **Backend**: Railway (~$5/mo, Docker support)
+
+### Deployment Files
+- `frontend/vercel.json` - Vercel configuration
+- `backend/railway.json` - Railway configuration
+- `backend/Dockerfile` - Python 3.12 + OpenCV/MediaPipe
+- `frontend/Dockerfile` - Multi-stage Node → Nginx build
+- `docker-compose.yml` - Local containerized testing
+
+### Deploy Steps
+1. **Frontend → Vercel**: Import GitHub repo, set root to `frontend`
+2. **Backend → Railway**: Import repo, set root to `backend`, add env vars
+3. Update `API_URL` in `frontend/src/App.jsx` to Railway URL
+4. Update `CORS_ORIGINS` in Railway to Vercel domain
+
+## Processing Flow
+
+```
+Frontend                           Backend
+   │                                  │
+   ├── Upload front photo ───────────►│
+   │                                  │
+   │                                  ├── Save original photo
+   │                                  ├── Calculate PPM (iris detection)
+   │                                  │
+   │                                  │ FOR EACH PRODUCT (6x):
+   │                                  │   │
+   │                                  │   ├── Load product's image2 as style ref
+   │                                  │   ├── Select random pose type
+   │                                  │   │
+   │                                  │   ├── STAGE 1: Generate pose
+   │                                  │   │   └── Preserve user identity 100%
+   │                                  │   │   └── Use style ref for lighting only
+   │                                  │   │   └── Save to poses/ folder
+   │                                  │   │
+   │                                  │   ├── Scale earring asset (PPM × mm)
+   │                                  │   │
+   │                                  │   ├── STAGE 2: Composite earring
+   │                                  │   │   └── Keep user identity from Stage 1
+   │                                  │   │   └── Use exact earring design
+   │                                  │   │   └── Save to try_ons/ folder
+   │                                  │   │
+   │◄─────────────────────────────────┤   └── Return base64 image
+   │                                  │
+   ├── Store in tryOnResults state    │
+   ├── Add to product carousel        │
+   └── User browses results           │
 ```
