@@ -1,3 +1,5 @@
+@import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@300;400;500;600&family=Montserrat:wght@300;400;500;600&display=swap');
+
 * {
   margin: 0;
   padding: 0;
@@ -5,20 +7,29 @@
 }
 
 :root {
-  --color-bg: #ffffff;
+  --color-bg: #fafafa;
+  --color-card-bg: #ffffff;
   --color-text: #1a1a1a;
-  --color-text-light: #666666;
-  --color-border: #e5e5e5;
-  --color-accent: #d4a574;
-  --font-main: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --color-text-light: #777777;
+  --color-text-muted: #999999;
+  --color-border: #e8e8e8;
+  --color-accent: #b8997a;
+  --color-accent-dark: #9a7d5c;
+  --color-gold: #c9a962;
+  --font-display: 'Cormorant Garamond', Georgia, serif;
+  --font-main: 'Montserrat', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --shadow-soft: 0 2px 20px rgba(0, 0, 0, 0.06);
+  --shadow-hover: 0 8px 40px rgba(0, 0, 0, 0.12);
+  --transition-smooth: all 0.4s cubic-bezier(0.25, 0.46, 0.45, 0.94);
 }
 
 body {
   font-family: var(--font-main);
   background-color: var(--color-bg);
   color: var(--color-text);
-  line-height: 1.5;
+  line-height: 1.6;
   -webkit-font-smoothing: antialiased;
+  font-weight: 300;
 }
 
 a {

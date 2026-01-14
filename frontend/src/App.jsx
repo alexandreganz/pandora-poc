@@ -472,6 +472,14 @@ function App() {
             image1: '/images/silver-heart-1.jpg',
             image2: '/images/silver-heart-2.jpg',
           },
+          {
+            id: 6,
+            name: 'Blue Butterfly',
+            price: 110.0,
+            dimensions: { width: 22, height: 20 },
+            image1: '/images/blue-butterfly-1.jpg',
+            image2: '/images/blue-butterfly-2.jpg',
+          },
         ])
         setLoading(false)
       })
