@@ -59,8 +59,8 @@ MODEL_ID = 'gemini-3-pro-image-preview'  # Primary model for image generation
 # Standard iris diameter constant for PPM calculation
 HVID_MM = 11.7
 
-# Path to earring assets (transparent PNGs)
-ASSETS_PATH = Path(__file__).parent.parent / "frontend" / "public" / "images"
+# Path to earring assets (JPGs for development, will be in backend/images for deployment)
+ASSETS_PATH = Path(__file__).parent / "images"
 
 # Output directories for generated images
 OUTPUT_BASE_PATH = Path(__file__).parent / "generated_images"
