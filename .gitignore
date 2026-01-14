@@ -29,3 +29,7 @@ npm-debug.log*
 # Generated Images (keep README)
 backend/generated_images/*
 !backend/generated_images/README.md
+
+# Google Cloud credentials (never commit)
+service-account.json
+*-service-account.json

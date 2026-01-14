@@ -5,17 +5,20 @@ import random
 import time
 import uuid
 import io
+import asyncio
 import cv2
 import numpy as np
 import mediapipe as mp
 from PIL import Image
 from pathlib import Path
 from datetime import datetime
-from fastapi import FastAPI, File, UploadFile, HTTPException
+from fastapi import FastAPI, File, UploadFile, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
+from drive_uploader import GoogleDriveUploader, upload_session_to_drive
+from cloudinary_uploader import CloudinaryUploader, upload_session_to_cloudinary
 
 # Fix Windows console encoding for Unicode characters (✓, ❌, etc.)
 if sys.platform == 'win32':
@@ -62,6 +65,25 @@ TRYON_OUTPUT_PATH = OUTPUT_BASE_PATH / "try_ons"
 # Create output directories if they don't exist
 for path in [OUTPUT_BASE_PATH, POSES_OUTPUT_PATH, TRYON_OUTPUT_PATH]:
     path.mkdir(parents=True, exist_ok=True)
+
+# Initialize Google Drive uploader (optional - for backup)
+DRIVE_ENABLED = os.getenv("GOOGLE_DRIVE_UPLOAD_ENABLED", "false").lower() == "true"
+if DRIVE_ENABLED:
+    drive_uploader = GoogleDriveUploader(
+        service_account_file=os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE", "service-account.json"),
+        root_folder_id=os.getenv("GOOGLE_DRIVE_FOLDER_ID", "")
+    )
+else:
+    drive_uploader = None
+    print("[Drive] Upload disabled via environment variable")
+
+# Initialize Cloudinary uploader (optional - for cloud storage)
+CLOUDINARY_ENABLED = os.getenv("CLOUDINARY_CLOUD_NAME") is not None
+if CLOUDINARY_ENABLED:
+    cloudinary_uploader = CloudinaryUploader()
+else:
+    cloudinary_uploader = None
+    print("[Cloudinary] Upload disabled - no credentials configured")
 
 # Product data with dimensions in mm for proper scaling
 PRODUCTS = [
@@ -237,6 +259,63 @@ class PhotoScaler:
 photo_scaler = PhotoScaler()
 
 
+# Target width for optimized images (balances quality vs upload speed)
+OPTIMIZED_WIDTH = 1280
+
+
+def optimize_image(image_bytes: bytes, target_width: int = OPTIMIZED_WIDTH, quality: int = 85) -> tuple[bytes, float]:
+    """
+    Resize image to target width to reduce upload size for API calls.
+
+    Args:
+        image_bytes: Original image bytes
+        target_width: Target width in pixels (height scales proportionally)
+        quality: JPEG quality (1-100)
+
+    Returns:
+        Tuple of (optimized_bytes, scale_ratio)
+        scale_ratio is new_width/original_width for PPM adjustment
+    """
+    try:
+        img = Image.open(io.BytesIO(image_bytes))
+        original_width, original_height = img.size
+
+        # Skip if already smaller than target
+        if original_width <= target_width:
+            print(f"   [OK] Image already optimized ({original_width}x{original_height})")
+            return image_bytes, 1.0
+
+        # Calculate new dimensions maintaining aspect ratio
+        scale_ratio = target_width / original_width
+        new_height = int(original_height * scale_ratio)
+
+        # Resize with high-quality resampling
+        resized = img.resize((target_width, new_height), Image.Resampling.LANCZOS)
+
+        # Convert to RGB if necessary (for JPEG output)
+        if resized.mode in ('RGBA', 'P'):
+            resized = resized.convert('RGB')
+
+        # Save as JPEG with specified quality
+        output = io.BytesIO()
+        resized.save(output, format='JPEG', quality=quality, optimize=True)
+        output.seek(0)
+        optimized_bytes = output.read()
+
+        original_kb = len(image_bytes) / 1024
+        optimized_kb = len(optimized_bytes) / 1024
+        reduction = (1 - optimized_kb / original_kb) * 100
+
+        print(f"   [OK] Image optimized: {original_width}x{original_height} -> {target_width}x{new_height}")
+        print(f"   [OK] Size reduced: {original_kb:.0f}KB -> {optimized_kb:.0f}KB ({reduction:.0f}% reduction)")
+
+        return optimized_bytes, scale_ratio
+
+    except Exception as e:
+        print(f"   [WARNING] Image optimization failed: {type(e).__name__}: {e}")
+        return image_bytes, 1.0
+
+
 class VirtualTryOnGenerator:
     """
     Two-Stage AI Virtual Try-On Workflow
@@ -262,14 +341,20 @@ class VirtualTryOnGenerator:
         self.poses_dir.mkdir(parents=True, exist_ok=True)
         self.tryon_dir.mkdir(parents=True, exist_ok=True)
 
-        # Target poses for variation
         self.target_poses = {
-            "profile_left": "a 90-degree profile view looking left",
-            "three_quarter_right": "a three-quarter view looking slightly right",
-            "slightly_up": "a slight upward gaze, exposing the neck and earlobe clearly",
-            "high_angle_down": "a high-angle view looking down at the subject, emphasizing the top of the head and the bridge of the nose",
-            "profile_right_tilt": "a 90-degree profile view looking right with the head tilted slightly toward the shoulder",
-            "back_three_quarter_left": "an over-the-shoulder view from behind, looking toward the left to show the jawline and back of the ear"
+            # --- EXISTING REFINED ---
+            "profile_left": "a strict 90-degree side profile looking left, emphasizing the sharp jawline and clear earlobe silhouette",
+            "three_quarter_right": "a classic three-quarter view looking slightly right, focusing on the ear and the soft curve of the cheek",
+            "slightly_up": "a slight upward gaze and chin tilt, lengthening the neck and providing an unobstructed view of the earlobe",
+            
+            # --- NEW BRAND-ALIGNED POSES ---
+            "editorial_tilt_down": "a subtle downward chin tuck while looking toward the camera, highlighting the top curve of the earring and the temple",
+            "over_shoulder_glance": "an over-the-shoulder view with the head turned back toward the lens, showcasing the ear and the back of the jaw",
+            "close_up_macro_ear": "an extreme macro side-view focusing exclusively on the ear and the area between the temple and the jawline",
+            "soft_chin_rest": "a three-quarter profile with the head resting slightly toward one shoulder, creating a soft, elegant angle for the jewelry",
+            "profile_zenith_gaze": "a side profile with the gaze directed far upward, pulling the skin taut across the jawline for a clean, architectural look",
+            "direct_ear_parallel": "a side view where the camera is perfectly parallel to the ear, capturing the earring's design with zero perspective distortion",
+            "low_angle_authority": "a slight low-angle view looking up toward the jaw and ear, giving the jewelry a more prominent, heroic presence"
         }
 
     def _save_image_from_response(self, response) -> bytes:
@@ -322,6 +407,7 @@ class VirtualTryOnGenerator:
             types.Part.from_bytes(data=style_ref_bytes, mime_type="image/jpeg"),
             f"TASK: Generate a new pose of the EXACT person from Image 1. "
             f"IDENTITY (CRITICAL - 100% PRESERVATION): "
+            f"The new background MUST match the clean, seamless studio aesthetic of Image 3. "
             f"- Face: Keep the EXACT same face shape, eyes, nose, mouth, eyebrows, and all facial features from Image 1. "
             f"- Skin: Keep the EXACT same skin tone, texture, and complexion from Image 1. "
             f"- Hair: Keep the EXACT same hair color, style, length, and texture from Image 1. "
@@ -397,17 +483,36 @@ class VirtualTryOnGenerator:
             types.Part.from_bytes(data=pose_bytes, mime_type="image/png"),   # Reference 1: Person
             types.Part.from_bytes(data=earring_bytes, mime_type="image/png"),# Reference 2: Earring
             types.Part.from_bytes(data=style_bytes, mime_type="image/jpeg"), # Reference 3: Style
-            f"TASK: Add the earring from Image 2 onto the person in Image 1. "
-            f"IDENTITY (CRITICAL - DO NOT CHANGE): "
-            f"- Keep 100% of the person's appearance from Image 1: face, skin tone, hair, features. "
-            f"- The person in the output must be IDENTICAL to Image 1 - do not alter any physical characteristics. "
-            f"EARRING: Use ONLY the exact {product_name} earring design from Image 2. "
-            f"- Do NOT modify, resize, or change the earring design in any way. "
-            f"- Place exactly ONE earring on the visible earlobe. Do NOT add extra earrings. "
-            f"FROM IMAGE 3 USE ONLY: Lighting direction and quality for the earring reflection/shadows. "
-            f"- Do NOT borrow any physical features from the person in Image 3. "
-            f"OUTPUT: The exact person from Image 1 wearing the exact earring from Image 2, with lighting from Image 3."
+        # 1. TASK OVERVIEW
+            f"TASK: Add the earring from Image 2 onto the person in Image 1. ",
+
+            # 2. IDENTITY CONSTRAINTS (IMAGE 1)
+            f"IDENTITY CONSTRAINT (CRITICAL): Keep 100% of the person's appearance from Image 1: face, skin tone, hair, and features. "
+            f"Do NOT borrow any physical features from the person in Image 3. No alterations to the model's anatomy. "
+
+            # 3. OBJECT CONSTRAINTS (IMAGE 2)
+            f"OBJECT CONSTRAINT (CRITICAL): Use ONLY the exact {product_name} design from Image 2. "
+            f"Maintain an EXACT PIXEL MATCH of its shape, size, and proportions. "
+            f"Do NOT resize, rescale, shrink, enlarge, or warp the earring design under any circumstances. "
+
+            # 4. PLACEMENT & STYLING
+            f"PLACEMENT: Place exactly ONE earring on the visible earlobe. Do NOT add extra earrings or piercings. "
+            f"WARDROBE: Maintain the minimalist styling of Image 1 (e.g., simple black/neutral tank or bare shoulders). "
+            f"The new background MUST match the clean, seamless studio aesthetic of Image 3. "
+
+            # 5. BRAND DNA & TEXTURE
+            f"BRAND DNA: Maintain hyper-realistic skin texture. Do NOT smooth, airbrush, or apply 'beauty' filters. "
+            f"Ensure natural pores, freckles, and fine lines are visible as seen in the brand's core imagery. "
+
+            # 6. LIGHTING & BACKGROUND
+            f"LIGHTING & STYLE: Apply the soft-box studio lighting and precise earring reflections from Image 3. "
+            f"BACKGROUND: Use a clean, seamless, softly blurred studio white or light grey background. "
+            f"Do NOT use dark, colored, or textured backgrounds. Ensure a shallow depth of field. "
+
+            # 7. FINAL OUTPUT
+            f"OUTPUT: A high-end, authentic macro editorial portrait. The exact person from Image 1 wearing the exact earring from Image 2."
         ]
+         
 
         try:
             print(f"      → Calling Gemini API ({self.model_id})...")
@@ -487,7 +592,8 @@ async def get_products():
 
 @app.post("/api/try-on-all")
 async def try_on_all(
-    front_photo: UploadFile = File(...)
+    front_photo: UploadFile = File(...),
+    background_tasks: BackgroundTasks = None
 ):
     """
     AI Virtual Try-On: Generate 5 photos (one for each earring model)
@@ -530,100 +636,63 @@ async def try_on_all(
         print("="*60)
         ppm = photo_scaler.calculate_ppm(front_contents)
         if ppm:
-            print(f"[OK] PPM calculated: {ppm:.4f} pixels/mm")
+            print(f"[OK] PPM calculated: {ppm:.4f} pixels/mm (from original resolution)")
         else:
             print("[WARNING] PPM calculation failed - using default scaling")
             ppm = None
         print("="*60 + "\n")
 
         # ============================================
-        # GENERATE UNIQUE POSE + COMPOSITION FOR EACH PRODUCT
+        # OPTIMIZE IMAGE: Reduce upload size for faster API calls
         # ============================================
-        # Shuffle pose keys for variety across products
+        print("="*60)
+        print("IMAGE OPTIMIZATION: Reducing upload size")
+        print("="*60)
+        front_contents, scale_ratio = optimize_image(front_contents)
+
+        # Adjust PPM for the resized image
+        if ppm and scale_ratio != 1.0:
+            ppm = ppm * scale_ratio
+            print(f"[OK] PPM adjusted for resize: {ppm:.4f} pixels/mm")
+        print("="*60 + "\n")
+
+        # ============================================
+        # PREPARE DATA FOR PARALLEL PROCESSING
+        # ============================================
         pose_keys = list(vto_generator.target_poses.keys())
         random.shuffle(pose_keys)
 
         print("\n" + "="*60)
-        print("GENERATING TRY-ONS WITH UNIQUE POSES")
+        print("PREPARING PRODUCTS FOR PARALLEL PROCESSING")
         print("="*60)
-        results = []
-        total_products = len(PRODUCTS)
 
-        for idx, product in enumerate(PRODUCTS, 1):
-            print(f"\n[{idx}/{total_products}] Processing: {product['name']} (ID: {product['id']})")
+        # Semaphore to limit concurrent API calls (avoid rate limits)
+        semaphore = asyncio.Semaphore(3)
 
-            # ============================================
-            # Load product's image2 as style reference
-            # ============================================
+        # Prepare all product data upfront
+        product_data = []
+        for idx, product in enumerate(PRODUCTS):
+            # Load and optimize style reference
             style_ref_filename = product["image2"].replace("/images/", "")
             style_ref_path = ASSETS_PATH / style_ref_filename
 
             if style_ref_path.exists():
                 with open(style_ref_path, "rb") as f:
                     style_bytes = f.read()
-                print(f"   [OK] Style reference loaded: {style_ref_filename}")
+                style_bytes, _ = optimize_image(style_bytes)
             else:
-                # Fallback to uploaded photo if image2 not found
                 style_bytes = front_contents
-                print(f"   [WARNING] Style ref not found, using uploaded photo")
 
-            # ============================================
-            # Select pose for this product (cycling through shuffled poses)
-            # ============================================
-            pose_key = pose_keys[idx % len(pose_keys)]
-            print(f"   → Pose: {pose_key}")
-
-            # ============================================
-            # STAGE 1: Generate unique pose for this product
-            # ============================================
-            print(f"   → Generating unique pose variation...")
-            stage1_start = time.time()
-
-            pose_bytes = vto_generator.generate_styled_pose(
-                face_bytes=front_contents,
-                style_ref_bytes=style_bytes,
-                pose_key=pose_key,
-                session_id=session_id
-            )
-            stage1_duration = time.time() - stage1_start
-
-            if not pose_bytes:
-                print(f"   [ERROR] Pose generation failed for {product['name']}")
-                results.append({
-                    "product_id": product["id"],
-                    "product_name": product["name"],
-                    "success": False,
-                    "error": "Pose generation failed"
-                })
-                continue
-
-            print(f"   [OK] Pose generated in {stage1_duration:.2f}s")
-
-            # ============================================
-            # Load earring asset
-            # ============================================
-            print(f"   Loading earring asset: {product['asset']}")
+            # Load and scale earring asset
             earring_asset_path = ASSETS_PATH / product["asset"]
-
             if not earring_asset_path.exists():
-                print(f"   [ERROR] Earring asset not found at {earring_asset_path}")
-                results.append({
-                    "product_id": product["id"],
-                    "product_name": product["name"],
-                    "success": False,
-                    "error": "Earring asset not found"
-                })
+                print(f"   [ERROR] Earring asset not found: {product['asset']}")
                 continue
 
-            # Read earring asset
-            print(f"   [OK] Earring asset loaded: {earring_asset_path}")
             with open(earring_asset_path, "rb") as f:
                 earring_bytes = f.read()
-            print(f"   [OK] Earring size: {len(earring_bytes)} bytes")
 
-            # Scale earring based on PPM if available
             if ppm and "height_mm" in product and "width_mm" in product:
-                print(f"   → Scaling earring to match user's photo...")
                 earring_bytes = photo_scaler.scale_earring(
                     earring_bytes=earring_bytes,
                     height_mm=product["height_mm"],
@@ -631,56 +700,126 @@ async def try_on_all(
                     ppm=ppm
                 )
 
-            # ============================================
-            # STAGE 2: Composite earring onto the unique pose
-            # ============================================
-            try:
-                print(f"   → Sending to Gemini API for composition...")
-                stage2_start = time.time()
+            pose_key = pose_keys[idx % len(pose_keys)]
 
-                final_image_bytes = vto_generator.generate_final_vto(
-                    pose_bytes=pose_bytes,
-                    earring_bytes=earring_bytes,
-                    style_bytes=style_bytes,
-                    session_id=session_id,
-                    product_name=product["name"]
-                )
+            product_data.append({
+                "product": product,
+                "style_bytes": style_bytes,
+                "earring_bytes": earring_bytes,
+                "pose_key": pose_key
+            })
+            print(f"   [OK] Prepared: {product['name']} (pose: {pose_key})")
 
-                stage2_duration = time.time() - stage2_start
+        print(f"\n[OK] {len(product_data)} products ready for parallel processing")
+        print("="*60 + "\n")
 
-                if final_image_bytes:
-                    # Convert to base64
-                    img_base64 = base64.b64encode(final_image_bytes).decode('utf-8')
+        # ============================================
+        # STAGE 1: PARALLEL POSE GENERATION
+        # ============================================
+        print("="*60)
+        print("STAGE 1: GENERATING ALL POSES IN PARALLEL")
+        print("="*60)
+        stage1_start = time.time()
 
-                    print(f"   [SUCCESS] IMAGE {idx}/{total_products} GENERATED in {stage2_duration:.2f}s")
-                    print(f"   [OK] Final image size: {len(final_image_bytes)} bytes")
-                    print(f"   [OK] Base64 encoded: {len(img_base64)} characters")
+        async def generate_pose_async(data, sem):
+            """Generate a single pose with semaphore control."""
+            async with sem:
+                product = data["product"]
+                print(f"   [START] Generating pose for: {product['name']}")
+                try:
+                    # Run blocking API call in thread pool
+                    pose_bytes = await asyncio.to_thread(
+                        vto_generator.generate_styled_pose,
+                        face_bytes=front_contents,
+                        style_ref_bytes=data["style_bytes"],
+                        pose_key=data["pose_key"],
+                        session_id=session_id
+                    )
+                    if pose_bytes:
+                        print(f"   [OK] Pose complete: {product['name']}")
+                    else:
+                        print(f"   [FAIL] Pose failed: {product['name']}")
+                    return {"data": data, "pose_bytes": pose_bytes}
+                except Exception as e:
+                    print(f"   [ERROR] Pose error for {product['name']}: {e}")
+                    return {"data": data, "pose_bytes": None, "error": str(e)}
 
-                    results.append({
-                        "product_id": product["id"],
-                        "product_name": product["name"],
-                        "success": True,
-                        "image": f"data:image/png;base64,{img_base64}"
-                    })
-                else:
-                    print(f"   [ERROR] IMAGE {idx}/{total_products} FAILED - No image bytes returned")
-                    results.append({
-                        "product_id": product["id"],
-                        "product_name": product["name"],
-                        "success": False,
-                        "error": "Image generation failed - no bytes returned"
-                    })
+        # Run all pose generations in parallel
+        pose_tasks = [generate_pose_async(d, semaphore) for d in product_data]
+        pose_results = await asyncio.gather(*pose_tasks)
 
-            except Exception as e:
-                print(f"   [ERROR] IMAGE {idx}/{total_products} ERROR: {type(e).__name__}: {str(e)}")
-                import traceback
-                print(f"   Traceback: {traceback.format_exc()}")
-                results.append({
+        stage1_duration = time.time() - stage1_start
+        successful_poses = sum(1 for r in pose_results if r.get("pose_bytes"))
+        print(f"\n[OK] Stage 1 complete: {successful_poses}/{len(product_data)} poses in {stage1_duration:.2f}s")
+        print("="*60 + "\n")
+
+        # ============================================
+        # STAGE 2: PARALLEL VTO COMPOSITION
+        # ============================================
+        print("="*60)
+        print("STAGE 2: COMPOSITING ALL EARRINGS IN PARALLEL")
+        print("="*60)
+        stage2_start = time.time()
+
+        async def generate_vto_async(pose_result, sem):
+            """Generate a single VTO with semaphore control."""
+            data = pose_result["data"]
+            pose_bytes = pose_result.get("pose_bytes")
+            product = data["product"]
+
+            if not pose_bytes:
+                return {
                     "product_id": product["id"],
                     "product_name": product["name"],
                     "success": False,
-                    "error": str(e)
-                })
+                    "error": pose_result.get("error", "Pose generation failed")
+                }
+
+            async with sem:
+                print(f"   [START] Compositing: {product['name']}")
+                try:
+                    final_bytes = await asyncio.to_thread(
+                        vto_generator.generate_final_vto,
+                        pose_bytes=pose_bytes,
+                        earring_bytes=data["earring_bytes"],
+                        style_bytes=data["style_bytes"],
+                        session_id=session_id,
+                        product_name=product["name"]
+                    )
+
+                    if final_bytes:
+                        img_base64 = base64.b64encode(final_bytes).decode('utf-8')
+                        print(f"   [OK] VTO complete: {product['name']}")
+                        return {
+                            "product_id": product["id"],
+                            "product_name": product["name"],
+                            "success": True,
+                            "image": f"data:image/png;base64,{img_base64}"
+                        }
+                    else:
+                        print(f"   [FAIL] VTO failed: {product['name']}")
+                        return {
+                            "product_id": product["id"],
+                            "product_name": product["name"],
+                            "success": False,
+                            "error": "VTO generation failed - no bytes returned"
+                        }
+                except Exception as e:
+                    print(f"   [ERROR] VTO error for {product['name']}: {e}")
+                    return {
+                        "product_id": product["id"],
+                        "product_name": product["name"],
+                        "success": False,
+                        "error": str(e)
+                    }
+
+        # Run all VTO generations in parallel
+        vto_tasks = [generate_vto_async(pr, semaphore) for pr in pose_results]
+        results = await asyncio.gather(*vto_tasks)
+
+        stage2_duration = time.time() - stage2_start
+        print(f"\n[OK] Stage 2 complete in {stage2_duration:.2f}s")
+        print("="*60 + "\n")
 
         # Summary
         success_count = sum(1 for r in results if r['success'])
@@ -708,6 +847,26 @@ async def try_on_all(
                     print(f"   • {r['product_name']}: {r.get('error', 'Unknown error')}")
 
         print("="*60 + "\n")
+
+        # Queue background upload to Google Drive (non-blocking)
+        if drive_uploader and drive_uploader.enabled and background_tasks:
+            background_tasks.add_task(
+                upload_session_to_drive,
+                uploader=drive_uploader,
+                session_id=session_id,
+                session_dir=session_dir
+            )
+            print(f"[Drive] Queued background upload for session: {session_id}")
+
+        # Queue background upload to Cloudinary (non-blocking)
+        if cloudinary_uploader and cloudinary_uploader.enabled and background_tasks:
+            background_tasks.add_task(
+                upload_session_to_cloudinary,
+                uploader=cloudinary_uploader,
+                session_id=session_id,
+                session_dir=session_dir
+            )
+            print(f"[Cloudinary] Queued background upload for session: {session_id}")
 
         return {
             "success": True,

@@ -73,6 +73,7 @@ cd frontend
 npm install        # Install dependencies
 npm run dev        # Start dev server (http://localhost:5173 or 5174)
 npm run build      # Build for production
+npm run lint       # Run ESLint
 ```
 
 ### Backend
@@ -80,6 +81,12 @@ npm run build      # Build for production
 cd backend
 pip install -r requirements.txt   # Install dependencies
 python -m uvicorn main:app --reload --host 0.0.0.0 --port 8000
+```
+
+### Docker (Local Development)
+```bash
+docker-compose up       # Start both frontend and backend
+docker-compose down     # Stop services
 ```
 
 **Key Backend Features:**
@@ -128,18 +135,25 @@ pandora/
 | Stage 1 | ~320-340 | Pose generation with identity preservation |
 | Stage 2 | ~396-420 | Earring composition |
 
-### To modify prompts:
-1. Edit `backend/main.py` at the line numbers above
-2. Save the file (Ctrl+S)
-3. Backend auto-reloads (watch for "WatchFiles detected changes" message)
-4. Test at http://localhost:5173 or 5174
+### Other Key Classes (backend/main.py)
+| Class | Lines | Purpose |
+|-------|-------|---------|
+| PhotoScaler | ~131-237 | Iris detection and PPM calculation for earring scaling |
+| VirtualTryOnGenerator | ~240-479 | Two-stage AI workflow orchestration |
 
 ### Product Data (backend/main.py)
-- Lines ~64-125: PRODUCTS array with id, name, price, images, dimensions
+- Lines ~64-128: PRODUCTS array with id, name, price, images, dimensions
+
+### API URL Configuration
+- `frontend/src/App.jsx` line ~9: `API_URL` constant (update for deployment)
 
 ### Frontend Styling
 - `frontend/src/index.css`: CSS variables, fonts, global styles
 - `frontend/src/App.css`: Component styles, grid layout, animations
+
+### Test Files
+- `tests/api-call-test.py`: API testing for virtual try-on workflow
+- `tests/photo_scaling.py`: Standalone iris detection and scaling tests
 
 ## Development Workflow
 
