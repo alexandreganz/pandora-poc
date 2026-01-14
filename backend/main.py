@@ -32,10 +32,13 @@ load_dotenv()
 
 app = FastAPI(title="Pandora API", version="1.0.0")
 
-# CORS for frontend
+# CORS for frontend (supports environment-based origins for production)
+cors_origins = os.getenv("CORS_ORIGINS", "http://localhost:5173,http://localhost:5174")
+allowed_origins = [origin.strip() for origin in cors_origins.split(",")]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:5174"],
+    allow_origins=allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
